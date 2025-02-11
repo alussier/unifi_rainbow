@@ -1,0 +1,9 @@
+[Unit]
+Description=Example systemd service.
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/rainbow
+
+[Install]
+WantedBy=multi-user.target
