@@ -1,48 +1,114 @@
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <math.h>
 #include <sched.h>
 #include <errno.h>
 
-/* Convert HSV values to RGB.
- * h: hue angle in degrees [0,360)
- * s: saturation [0,1]
- * v: value [0,1]
- * The resulting r, g, b values are in the range [0,255].
- */
-void hsv_to_rgb(double h, double s, double v, int *r, int *g, int *b) {
-    double C = v * s;  // Chroma
-    double X = C * (1 - fabs(fmod(h / 60.0, 2) - 1));
-    double m = v - C;
-    double r_temp, g_temp, b_temp;
+#define TAU (2 * M_PI)
 
-    if (h < 60) {
-        r_temp = C; g_temp = X; b_temp = 0;
-    } else if (h < 120) {
-        r_temp = X; g_temp = C; b_temp = 0;
-    } else if (h < 180) {
-        r_temp = 0; g_temp = C; b_temp = X;
-    } else if (h < 240) {
-        r_temp = 0; g_temp = X; b_temp = C;
-    } else if (h < 300) {
-        r_temp = X; g_temp = 0; b_temp = C;
-    } else { // h < 360
-        r_temp = C; g_temp = 0; b_temp = X;
+// adapted from https://github.com/FastLED/FastLED/blob/master/src/hsv2rgb.cpp
+void hue_to_rgb(uint8_t hue, uint8_t *p_r, uint8_t *p_g, uint8_t *p_b) {
+    // Yellow has a higher inherent brightness than
+    // any other color; 'pure' yellow is perceived to
+    // be 93% as bright as white.  In order to make
+    // yellow appear the correct relative brightness,
+    // it has to be rendered brighter than all other
+    // colors.
+
+    uint8_t offset = hue & 0x1F; // 0..31
+
+    // offset8 = offset * 8
+    uint8_t offset8 = offset << 3;
+
+    uint8_t third = offset8 / 3; // max = 85
+
+    uint8_t r, g, b;
+
+    if( ! (hue & 0x80) ) {
+        // 0XX
+        if( ! (hue & 0x40) ) {
+            // 00X
+            //section 0-1
+            if( ! (hue & 0x20) ) {
+                // 000
+                //case 0: // R -> O
+                r = 255 - third;
+                g = third;
+                b = 0;
+            } else {
+                // 001
+                //case 1: // O -> Y
+                r = 171;
+                g = 85 + third ;
+                b = 0;
+            }
+        } else {
+            //01X
+            // section 2-3
+            if( !  (hue & 0x20) ) {
+                // 010
+                //case 2: // Y -> G
+                uint8_t twothirds = (third << 1);
+                r = 171 - twothirds;
+                g = 170 + third;
+                b = 0;
+            } else {
+                // 011
+                // case 3: // G -> A
+                r = 0;
+                g = 255 - third;
+                b = third;
+            }
+        }
+    } else {
+        // section 4-7
+        // 1XX
+        if( ! (hue & 0x40) ) {
+            // 10X
+            if( ! ( hue & 0x20) ) {
+                // 100
+                //case 4: // A -> B
+                r = 0;
+                uint8_t twothirds = (third << 1);
+                g = 171 - twothirds; //K170?
+                b = 85  + twothirds;
+            } else {
+                // 101
+                //case 5: // B -> P
+                r = third;
+                g = 0;
+                b = 255 - third;
+            }
+        } else {
+            if( !  (hue & 0x20)  ) {
+                // 110
+                //case 6: // P -- K
+                r = 85 + third;
+                g = 0;
+                b = 171 - third;
+            } else {
+                // 111
+                //case 7: // K -> R
+                r = 170 + third;
+                g = 0;
+                b = 85 - third;
+            }
+        }
     }
 
-    *r = (int)round((r_temp + m) * 255);
-    *g = (int)round((g_temp + m) * 255);
-    *b = (int)round((b_temp + m) * 255);
+    *p_r = r;
+    *p_g = g;
+    *p_b = b;
 }
 
 int main(void) {
     const char *led_path = "/sys/class/leds/mcu0/color";
-    double hue = 0.0;
-    const double hue_increment = 1.0;  // Increase hue by 1 degree each iteration.
-    const int delay_us = 50000;        // Delay in microseconds (50ms) between updates.
-    int r, g, b;
+    const uint8_t hue_increment = 1;
+    const useconds_t delay_us = 50000;        // Delay in microseconds (50ms) between updates.
+    uint8_t r, g, b;
 
     /* --- Set Idle CPU Priority --- */
     struct sched_param sp = { .sched_priority = 0 };
@@ -51,10 +117,9 @@ int main(void) {
         exit(EXIT_FAILURE);
     }
 
-    /* Main loop: update LED color in a smooth cycle */
-    while (1) {
-        // Convert the current hue (with full saturation and value) to RGB.
-        hsv_to_rgb(hue, 1.0, 1.0, &r, &g, &b);
+    /* hue from 0 to 255 */
+    for (uint8_t hue = 0; ; hue = (hue + hue_increment) % 256) {
+        hue_to_rgb(hue, &r, &g, &b);
 
         // Open the LED color file for writing.
         FILE *fp = fopen(led_path, "w");
@@ -66,11 +131,6 @@ int main(void) {
         // Write the color in hex (e.g. "FF00FF").
         fprintf(fp, "%02X%02X%02X", r, g, b);
         fclose(fp);
-
-        // Increment the hue and wrap around if needed.
-        hue += hue_increment;
-        if (hue >= 360.0)
-            hue -= 360.0;
 
         // Sleep for a short period to make the transition smooth.
         usleep(delay_us);
