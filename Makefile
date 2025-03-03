@@ -1,3 +1,7 @@
+# macOS:
+# brew tap messense/macos-cross-toolchains
+# brew install aarch64-unknown-linux-gnu
+
 # Compiler settings
 CC = aarch64-linux-gnu-gcc
 SRC = rainbow.c
